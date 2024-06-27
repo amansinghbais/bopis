@@ -214,9 +214,9 @@ import { DateTime } from 'luxon';
 import { UserService } from '@/services/UserService'
 import { showToast } from '@/utils';
 import { hasError, removeClientRegistrationToken, subscribeTopic, unsubscribeTopic } from '@/adapter'
-import { translate } from "@hotwax/dxp-components";
+import { initialiseFirebaseApp, translate } from "@hotwax/dxp-components";
 import { Actions, hasPermission } from '@/authorization'
-import { generateTopicName } from "@/utils/firebase";
+import { addNotification, generateTopicName, storeClientRegistrationToken } from "@/utils/firebase";
 import emitter from "@/event-bus"
 import logger from '@/logger';
 
@@ -425,10 +425,15 @@ export default defineComponent({
         // and updating the toggle). But it returns the updated value on further references (if passed
         // as a parameter in other function, here in our case, passed from confirmNotificationPrefUpdate)
         // Hence, event.target.checked here holds the updated value (value after the toggle action)
-        event.target.checked
-          ? await subscribeTopic(topicName, process.env.VUE_APP_NOTIF_APP_ID)
-          : await unsubscribeTopic(topicName, process.env.VUE_APP_NOTIF_APP_ID)
+        const notificationPref = this.notificationPrefs.find((pref: any) => pref.enumId === enumId);
+        notificationPref.isEnabled = !notificationPref.isEnabled
+
+        notificationPref.isEnabled
+        ? await subscribeTopic(topicName, process.env.VUE_APP_NOTIF_APP_ID)
+        : await unsubscribeTopic(topicName, process.env.VUE_APP_NOTIF_APP_ID)
         showToast(translate('Notification preferences updated.'))
+        console.log(this.notificationPrefs);
+        await this.store.dispatch('user/updateNotificationPrefs', this.notificationPrefs)
       } catch (error) {
         // reverting the value of toggle as event.target.checked is 
         // updated on click event, and revert is needed on API fail
@@ -439,6 +444,8 @@ export default defineComponent({
       }
     },
     async confirmNotificationPrefUpdate(enumId: string, event: any) {
+      event.stopImmediatePropagation();
+
       const message = translate("Are you sure you want to update the notification preferences?");
       const alert = await alertController.create({
         header: translate("Update notification preferences"),
@@ -457,6 +464,24 @@ export default defineComponent({
             handler: async () => {
               // passing event reference for updation in case the API fails
               alertController.dismiss()
+
+              let permission = Notification.permission;
+              if(permission === 'default') {
+                permission = await Notification.requestPermission();
+              }
+
+              if(permission === 'granted') {
+                await initialiseFirebaseApp(
+                  JSON.parse(process.env.VUE_APP_FIREBASE_CONFIG),
+                  process.env.VUE_APP_FIREBASE_VAPID_KEY,
+                  storeClientRegistrationToken,
+                  addNotification,
+                )
+              } else if(permission === 'denied') {
+                showToast("You denied notification. Please enable it in browser setting to update notification preference.")
+                return;
+              }
+
               await this.updateNotificationPref(enumId, event)
             }
           }
